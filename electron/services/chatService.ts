@@ -1687,11 +1687,24 @@ class ChatService {
       }
 
       const cleanedWxid = this.cleanAccountDirName(myWxid)
-      const result = await wcdbService.getAvatarUrls([myWxid, cleanedWxid])
+      // 增加 'self' 作为兜底标识符，微信有时将个人信息存储在 'self' 记录中
+      const fetchList = Array.from(new Set([myWxid, cleanedWxid, 'self']))
+
+      console.log(`[ChatService] 尝试获取个人头像, wxids: ${JSON.stringify(fetchList)}`)
+      const result = await wcdbService.getAvatarUrls(fetchList)
+
       if (result.success && result.map) {
-        const avatarUrl = result.map[myWxid] || result.map[cleanedWxid]
-        return { success: true, avatarUrl }
+        // 按优先级尝试匹配
+        const avatarUrl = result.map[myWxid] || result.map[cleanedWxid] || result.map['self']
+        if (avatarUrl) {
+          console.log(`[ChatService] 成功获取个人头像: ${avatarUrl.substring(0, 50)}...`)
+          return { success: true, avatarUrl }
+        }
+        console.warn(`[ChatService] 未能在 contact.db 中找到个人头像, 请求列表: ${JSON.stringify(fetchList)}`)
+        return { success: true, avatarUrl: undefined }
       }
+
+      console.error(`[ChatService] 查询个人头像失败: ${result.error || '未知错误'}`)
       return { success: true, avatarUrl: undefined }
     } catch (e) {
       console.error('ChatService: 获取当前用户头像失败:', e)

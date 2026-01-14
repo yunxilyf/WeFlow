@@ -127,6 +127,7 @@ function ChatPage(_props: ChatPageProps) {
   const sessionListRef = useRef<HTMLDivElement>(null)
   const [currentOffset, setCurrentOffset] = useState(0)
   const [myAvatarUrl, setMyAvatarUrl] = useState<string | undefined>(undefined)
+  const [myWxid, setMyWxid] = useState<string | undefined>(undefined)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(260)
   const [isResizing, setIsResizing] = useState(false)
@@ -203,6 +204,9 @@ function ChatPage(_props: ChatPageProps) {
         setConnected(true)
         await loadSessions()
         await loadMyAvatar()
+        // 获取 myWxid 用于匹配个人头像
+        const wxid = await window.electronAPI.config.get('myWxid')
+        if (wxid) setMyWxid(wxid as string)
       } else {
         setConnectionError(result.error || '连接失败')
       }
@@ -433,6 +437,12 @@ function ChatPage(_props: ChatPageProps) {
         // 将更新加入队列，用于侧边栏更新
         for (const [username, contact] of Object.entries(result.contacts)) {
           contactUpdateQueueRef.current.set(username, contact)
+
+          // 如果是自己的信息且当前个人头像为空，同步更新
+          if (myWxid && username === myWxid && contact.avatarUrl && !myAvatarUrl) {
+            console.log('[ChatPage] 从联系人同步获取到个人头像')
+            setMyAvatarUrl(contact.avatarUrl)
+          }
 
           // 【核心优化】同步更新全局发送者头像缓存，供 MessageBubble 使用
           senderAvatarCache.set(username, {
@@ -1378,9 +1388,9 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat }:
     })
   }
 
-  // 群聊中获取发送者信息
+  // 群聊中获取发送者信息 (如果自己发的没头像，也尝试拉取)
   useEffect(() => {
-    if (isGroupChat && !isSent && message.senderUsername) {
+    if (message.senderUsername && (isGroupChat || (isSent && !myAvatarUrl))) {
       const sender = message.senderUsername
       const cached = senderAvatarCache.get(sender)
       if (cached) {
@@ -1410,7 +1420,7 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat }:
         senderAvatarLoading.delete(sender)
       })
     }
-  }, [isGroupChat, isSent, message.senderUsername])
+  }, [isGroupChat, isSent, message.senderUsername, myAvatarUrl])
 
   // 自动下载表情包
   useEffect(() => {
@@ -1577,11 +1587,11 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat }:
   const bubbleClass = isSent ? 'sent' : 'received'
 
   // 头像逻辑：
-  // - 自己发的：使用 myAvatarUrl
+  // - 自己发的：优先使用 myAvatarUrl，缺失则用 senderAvatarUrl (补救)
   // - 群聊中对方发的：使用发送者头像
   // - 私聊中对方发的：使用会话头像
   const avatarUrl = isSent
-    ? myAvatarUrl
+    ? (myAvatarUrl || senderAvatarUrl)
     : (isGroupChat ? senderAvatarUrl : session.avatarUrl)
   const avatarLetter = isSent
     ? '我'
