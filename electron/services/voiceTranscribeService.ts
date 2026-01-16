@@ -181,36 +181,40 @@ export class VoiceTranscribeService {
       await execFileAsync(ffmpegPath, ['-y', '-i', inputPath, '-ar', '16000', '-ac', '1', outputPath])
       
       console.info('[VoiceTranscribe] transcribing with whisper', { whisperExe, modelPath })
-      const { stdout } = await execFileAsync(whisperExe, [
+      const { stdout, stderr } = await execFileAsync(whisperExe, [
         '-m', modelPath,
         '-f', outputPath,
         '-l', 'zh',
-        '-otxt'
+        '-otxt',
+        '-np'  // no prints (只输出结果)
       ], {
         maxBuffer: 10 * 1024 * 1024,
-        cwd: tempDir
+        cwd: dirname(whisperExe),  // 设置工作目录为 whisper-cli.exe 所在目录，确保能找到 DLL
+        env: { ...process.env, PATH: `${dirname(whisperExe)};${process.env.PATH}` }
       })
 
+      console.info('[VoiceTranscribe] whisper stdout:', stdout)
+      if (stderr) console.warn('[VoiceTranscribe] whisper stderr:', stderr)
+
       // 解析输出文本
-      const txtFile = outputPath.replace(/\.[^.]+$/, '.txt')
+      const outputBase = outputPath.replace(/\.[^.]+$/, '')
+      const txtFile = `${outputBase}.txt`
       let transcript = ''
       if (existsSync(txtFile)) {
         const { readFileSync } = await import('fs')
         transcript = readFileSync(txtFile, 'utf-8').trim()
         unlinkSync(txtFile)
       } else {
-        // 从 stdout 提取
-        const lines = stdout.split('\n').filter(line => {
-          const trimmed = line.trim()
-          return trimmed && !trimmed.startsWith('[') && !trimmed.startsWith('whisper_')
-        })
-        transcript = lines.join(' ').trim()
+        // 从 stdout 提取（使用 -np 参数后，stdout 只有转写结果）
+        transcript = stdout.trim()
       }
 
       console.info('[VoiceTranscribe] success', { transcript })
       return { success: true, transcript }
-    } catch (error) {
+    } catch (error: any) {
       console.error('[VoiceTranscribe] failed', error)
+      console.error('[VoiceTranscribe] stderr:', error.stderr)
+      console.error('[VoiceTranscribe] stdout:', error.stdout)
       return { success: false, error: String(error) }
     } finally {
       try { if (existsSync(inputPath)) unlinkSync(inputPath) } catch { }
