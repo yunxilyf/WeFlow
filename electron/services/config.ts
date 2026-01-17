@@ -23,6 +23,8 @@ interface ConfigSchema {
   whisperModelName: string
   whisperModelDir: string
   whisperDownloadSource: string
+  autoTranscribeVoice: boolean
+  transcribeLanguages: string[]
 }
 
 export class ConfigService {
@@ -48,7 +50,9 @@ export class ConfigService {
         llmModelPath: '',
         whisperModelName: 'base',
         whisperModelDir: '',
-        whisperDownloadSource: 'tsinghua'
+        whisperDownloadSource: 'tsinghua',
+        autoTranscribeVoice: false,
+        transcribeLanguages: ['zh']
       }
     })
   }

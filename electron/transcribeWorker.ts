@@ -6,6 +6,43 @@ interface WorkerParams {
     tokensPath: string
     wavData: Buffer
     sampleRate: number
+    languages?: string[]
+}
+
+// 语言标记映射
+const LANGUAGE_TAGS: Record<string, string> = {
+    'zh': '<|zh|>',
+    'en': '<|en|>',
+    'ja': '<|ja|>',
+    'ko': '<|ko|>',
+    'yue': '<|yue|>' // 粤语
+}
+
+// 检查识别结果是否在允许的语言列表中
+function isLanguageAllowed(result: any, allowedLanguages: string[]): boolean {
+    if (!result || !result.lang) {
+        // 如果没有语言信息，默认允许
+        return true
+    }
+
+    // 如果没有指定语言或语言列表为空，默认只允许中文
+    if (!allowedLanguages || allowedLanguages.length === 0) {
+        allowedLanguages = ['zh']
+    }
+
+    const langTag = result.lang
+    console.log('[TranscribeWorker] 检测到语言标记:', langTag)
+
+    // 检查是否在允许的语言列表中
+    for (const lang of allowedLanguages) {
+        if (LANGUAGE_TAGS[lang] === langTag) {
+            console.log('[TranscribeWorker] 语言匹配，允许:', lang)
+            return true
+        }
+    }
+
+    console.log('[TranscribeWorker] 语言不在白名单中，过滤掉')
+    return false
 }
 
 async function run() {
@@ -23,8 +60,16 @@ async function run() {
             return;
         }
 
-        const { modelPath, tokensPath, wavData: rawWavData, sampleRate } = workerData as WorkerParams
+        const { modelPath, tokensPath, wavData: rawWavData, sampleRate, languages } = workerData as WorkerParams
         const wavData = Buffer.from(rawWavData);
+        // 确保有有效的语言列表，默认只允许中文
+        let allowedLanguages = languages || ['zh']
+        if (allowedLanguages.length === 0) {
+          allowedLanguages = ['zh']
+        }
+        
+        console.log('[TranscribeWorker] 使用的语言白名单:', allowedLanguages)
+        
         // 1. 初始化识别器 (SenseVoiceSmall)
         const recognizerConfig = {
             modelConfig: {
@@ -66,7 +111,16 @@ async function run() {
             recognizer.decode(stream)
             const result = recognizer.getResult(stream)
 
-            parentPort.postMessage({ type: 'final', text: result.text })
+            console.log('[TranscribeWorker] 非VAD模式 - 识别结果对象:', JSON.stringify(result, null, 2))
+            
+            // 检查语言是否在白名单中
+            if (isLanguageAllowed(result, allowedLanguages)) {
+                console.log('[TranscribeWorker] 非VAD模式 - 保留文本:', result.text)
+                parentPort.postMessage({ type: 'final', text: result.text })
+            } else {
+                console.log('[TranscribeWorker] 非VAD模式 - 语言不匹配，返回空文本')
+                parentPort.postMessage({ type: 'final', text: '' })
+            }
             return
         }
 
@@ -100,13 +154,18 @@ async function run() {
                 recognizer.decode(stream)
                 const result = recognizer.getResult(stream)
 
-                if (result.text) {
-                    const text = result.text.trim();
+                console.log('[TranscribeWorker] 识别结果 - lang:', result.lang, 'text:', result.text)
+                
+                // 检查语言是否在白名单中
+                if (result.text && isLanguageAllowed(result, allowedLanguages)) {
+                    const text = result.text.trim()
                     if (text.length > 0) {
                         accumulatedText += (accumulatedText ? ' ' : '') + text
                         segmentCount++;
                         parentPort.postMessage({ type: 'partial', text: accumulatedText })
                     }
+                } else if (result.text) {
+                    console.log('[TranscribeWorker] 跳过不匹配的语言段落')
                 }
                 vad.pop()
             }
@@ -124,9 +183,16 @@ async function run() {
             stream.acceptWaveform({ sampleRate, samples: segment.samples })
             recognizer.decode(stream)
             const result = recognizer.getResult(stream)
-            if (result.text) {
-                accumulatedText += (accumulatedText ? ' ' : '') + result.text.trim()
-                parentPort.postMessage({ type: 'partial', text: accumulatedText })
+            
+            console.log('[TranscribeWorker] flush阶段 - lang:', result.lang, 'text:', result.text)
+            
+            // 检查语言是否在白名单中
+            if (result.text && isLanguageAllowed(result, allowedLanguages)) {
+                const text = result.text.trim()
+                if (text) {
+                    accumulatedText += (accumulatedText ? ' ' : '') + text
+                    parentPort.postMessage({ type: 'partial', text: accumulatedText })
+                }
             }
             vad.pop();
         }

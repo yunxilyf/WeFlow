@@ -123,7 +123,16 @@ export class VoiceTranscribeService {
         const tokensPath = this.resolveModelPath(SENSEVOICE_MODEL.files.tokens)
         const vadPath = this.resolveModelPath((SENSEVOICE_MODEL.files as any).vad)
 
+        // 初始进度
+        onProgress?.({
+          modelName: SENSEVOICE_MODEL.name,
+          downloadedBytes: 0,
+          totalBytes: SENSEVOICE_MODEL.sizeBytes,
+          percent: 0
+        })
+
         // 下载模型文件 (40%)
+        console.info('[VoiceTranscribe] 开始下载模型文件...')
         await this.downloadToFile(
           MODEL_DOWNLOAD_URLS.model,
           modelPath,
@@ -140,6 +149,7 @@ export class VoiceTranscribeService {
         )
 
         // 下载 tokens 文件 (30%)
+        console.info('[VoiceTranscribe] 开始下载 tokens 文件...')
         await this.downloadToFile(
           MODEL_DOWNLOAD_URLS.tokens,
           tokensPath,
@@ -157,6 +167,7 @@ export class VoiceTranscribeService {
         )
 
         // 下载 vad 文件 (30%)
+        console.info('[VoiceTranscribe] 开始下载 VAD 文件...')
         await this.downloadToFile(
           (MODEL_DOWNLOAD_URLS as any).vad,
           vadPath,
@@ -174,6 +185,7 @@ export class VoiceTranscribeService {
           }
         )
 
+        console.info('[VoiceTranscribe] 所有文件下载完成')
         return { success: true, modelPath, tokensPath }
       } catch (error) {
         const modelPath = this.resolveModelPath(SENSEVOICE_MODEL.files.model)
@@ -199,7 +211,8 @@ export class VoiceTranscribeService {
    */
   async transcribeWavBuffer(
     wavData: Buffer,
-    onPartial?: (text: string) => void
+    onPartial?: (text: string) => void,
+    languages?: string[]
   ): Promise<{ success: boolean; transcript?: string; error?: string }> {
     return new Promise((resolve) => {
       try {
@@ -211,6 +224,16 @@ export class VoiceTranscribeService {
           return
         }
 
+        // 获取配置的语言列表，如果没有传入则从配置读取
+        let supportedLanguages = languages
+        if (!supportedLanguages || supportedLanguages.length === 0) {
+          supportedLanguages = this.configService.get('transcribeLanguages')
+          // 如果配置中也没有或为空，使用默认值
+          if (!supportedLanguages || supportedLanguages.length === 0) {
+            supportedLanguages = ['zh']
+          }
+        }
+
         const { Worker } = require('worker_threads')
         // main.js 和 transcribeWorker.js 同在 dist-electron 目录下
         const workerPath = join(__dirname, 'transcribeWorker.js')
@@ -220,7 +243,8 @@ export class VoiceTranscribeService {
             modelPath,
             tokensPath,
             wavData,
-            sampleRate: 16000
+            sampleRate: 16000,
+            languages: supportedLanguages
           }
         })
 
@@ -273,10 +297,13 @@ export class VoiceTranscribeService {
       const options = {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
+        },
+        timeout: 30000 // 30秒连接超时
       }
 
       const request = protocol.get(url, options, (response) => {
+        console.info(`[VoiceTranscribe] ${fileName} 响应状态:`, response.statusCode)
+        
         // 处理重定向
         if ([301, 302, 303, 307, 308].includes(response.statusCode || 0) && response.headers.location) {
           if (remainingRedirects <= 0) {
@@ -297,25 +324,44 @@ export class VoiceTranscribeService {
 
         const totalBytes = Number(response.headers['content-length'] || 0) || undefined
         let downloadedBytes = 0
+        
+        console.info(`[VoiceTranscribe] ${fileName} 文件大小:`, totalBytes ? `${(totalBytes / 1024 / 1024).toFixed(2)} MB` : '未知')
 
         const writer = createWriteStream(targetPath)
+        
+        // 设置数据接收超时（60秒没有数据则超时）
+        let lastDataTime = Date.now()
+        const dataTimeout = setInterval(() => {
+          if (Date.now() - lastDataTime > 60000) {
+            clearInterval(dataTimeout)
+            response.destroy()
+            writer.close()
+            reject(new Error('下载超时：60秒内未收到数据'))
+          }
+        }, 5000)
 
         response.on('data', (chunk) => {
+          lastDataTime = Date.now()
           downloadedBytes += chunk.length
           onProgress?.(downloadedBytes, totalBytes)
         })
 
         response.on('error', (error) => {
+          clearInterval(dataTimeout)
           try { writer.close() } catch { }
+          console.error(`[VoiceTranscribe] ${fileName} 响应错误:`, error)
           reject(error)
         })
 
         writer.on('error', (error) => {
+          clearInterval(dataTimeout)
           try { writer.close() } catch { }
+          console.error(`[VoiceTranscribe] ${fileName} 写入错误:`, error)
           reject(error)
         })
 
         writer.on('finish', () => {
+          clearInterval(dataTimeout)
           writer.close()
           console.info(`[VoiceTranscribe] ${fileName} 下载完成:`, targetPath)
           resolve()
@@ -324,8 +370,14 @@ export class VoiceTranscribeService {
         response.pipe(writer)
       })
 
+      request.on('timeout', () => {
+        request.destroy()
+        console.error(`[VoiceTranscribe] ${fileName} 连接超时`)
+        reject(new Error('连接超时'))
+      })
+
       request.on('error', (error) => {
-        console.error(`[VoiceTranscribe] ${fileName} 下载错误:`, error)
+        console.error(`[VoiceTranscribe] ${fileName} 请求错误:`, error)
         reject(error)
       })
     })

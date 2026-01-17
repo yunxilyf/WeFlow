@@ -352,6 +352,37 @@
   color: var(--text-secondary);
 }
 
+.language-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.language-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+
+  input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    accent-color: var(--primary);
+  }
+
+  .checkbox-label {
+    font-size: 14px;
+    color: var(--text-primary);
+  }
+
+  &:hover .checkbox-label {
+    color: var(--primary);
+  }
+}
+
 .switch {
   position: relative;
   width: 46px;

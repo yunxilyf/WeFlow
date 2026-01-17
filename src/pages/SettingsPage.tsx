@@ -48,6 +48,7 @@ function SettingsPage() {
   const [whisperDownloadProgress, setWhisperDownloadProgress] = useState(0)
   const [whisperModelStatus, setWhisperModelStatus] = useState<{ exists: boolean; modelPath?: string; tokensPath?: string } | null>(null)
   const [autoTranscribeVoice, setAutoTranscribeVoice] = useState(false)
+  const [transcribeLanguages, setTranscribeLanguages] = useState<string[]>(['zh'])
 
   const [isLoading, setIsLoadingState] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
@@ -112,6 +113,7 @@ function SettingsPage() {
       const savedWhisperModelName = await configService.getWhisperModelName()
       const savedWhisperModelDir = await configService.getWhisperModelDir()
       const savedAutoTranscribe = await configService.getAutoTranscribeVoice()
+      const savedTranscribeLanguages = await configService.getTranscribeLanguages()
 
       if (savedKey) setDecryptKey(savedKey)
       if (savedPath) setDbPath(savedPath)
@@ -123,6 +125,15 @@ function SettingsPage() {
       if (savedImageAesKey) setImageAesKey(savedImageAesKey)
       setLogEnabled(savedLogEnabled)
       setAutoTranscribeVoice(savedAutoTranscribe)
+      setTranscribeLanguages(savedTranscribeLanguages)
+      
+      // 如果语言列表为空，保存默认值
+      if (!savedTranscribeLanguages || savedTranscribeLanguages.length === 0) {
+        const defaultLanguages = ['zh']
+        setTranscribeLanguages(defaultLanguages)
+        await configService.setTranscribeLanguages(defaultLanguages)
+      }
+      
       if (savedWhisperModelDir) setWhisperModelDir(savedWhisperModelDir)
     } catch (e) {
       console.error('加载配置失败:', e)
@@ -454,6 +465,7 @@ function SettingsPage() {
       }
       await configService.setWhisperModelDir(whisperModelDir)
       await configService.setAutoTranscribeVoice(autoTranscribeVoice)
+      await configService.setTranscribeLanguages(transcribeLanguages)
       await configService.setOnboardingDone(true)
 
       showMessage('配置保存成功，正在测试连接...', true)
@@ -490,6 +502,7 @@ function SettingsPage() {
       setCachePath('')
       setLogEnabled(false)
       setAutoTranscribeVoice(false)
+      setTranscribeLanguages(['zh'])
       setWhisperModelDir('')
       setWhisperModelStatus(null)
       setWhisperDownloadProgress(0)
@@ -755,6 +768,46 @@ function SettingsPage() {
             />
             <span className="switch-slider" />
           </label>
+        </div>
+      </div>
+      <div className="form-group">
+        <label>支持的语言</label>
+        <span className="form-hint">选择需要识别的语言（至少选择一种）</span>
+        <div className="language-checkboxes">
+          {[
+            { code: 'zh', name: '中文' },
+            { code: 'en', name: '英文' },
+            { code: 'ja', name: '日文' },
+            { code: 'ko', name: '韩文' }
+          ].map((lang) => (
+            <label key={lang.code} className="language-checkbox">
+              <input
+                type="checkbox"
+                checked={transcribeLanguages.includes(lang.code)}
+                onChange={async (e) => {
+                  const checked = e.target.checked
+                  let newLanguages: string[]
+                  
+                  if (checked) {
+                    // 添加语言
+                    newLanguages = [...transcribeLanguages, lang.code]
+                  } else {
+                    // 移除语言，但至少保留一个
+                    if (transcribeLanguages.length <= 1) {
+                      showMessage('至少需要选择一种语言', false)
+                      return
+                    }
+                    newLanguages = transcribeLanguages.filter(l => l !== lang.code)
+                  }
+                  
+                  setTranscribeLanguages(newLanguages)
+                  await configService.setTranscribeLanguages(newLanguages)
+                  showMessage(`已${checked ? '添加' : '移除'}${lang.name}`, true)
+                }}
+              />
+              <span className="checkbox-label">{lang.name}</span>
+            </label>
+          ))}
         </div>
       </div>
       <div className="form-group whisper-section">

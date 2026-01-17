@@ -18,7 +18,12 @@ export const VoiceTranscribeDialog: React.FC<VoiceTranscribeDialogProps> = ({
 
     useEffect(() => {
         // 监听下载进度
-        const removeListener = window.electronAPI.whisper?.onDownloadProgress?.((payload) => {
+        if (!window.electronAPI?.whisper?.onDownloadProgress) {
+            console.warn('[VoiceTranscribeDialog] whisper API 不可用')
+            return
+        }
+
+        const removeListener = window.electronAPI.whisper.onDownloadProgress((payload) => {
             if (payload.percent !== undefined) {
                 setDownloadProgress(payload.percent)
             }
@@ -30,12 +35,17 @@ export const VoiceTranscribeDialog: React.FC<VoiceTranscribeDialogProps> = ({
     }, [])
 
     const handleDownload = async () => {
+        if (!window.electronAPI?.whisper?.downloadModel) {
+            setDownloadError('语音转文字功能不可用')
+            return
+        }
+
         setIsDownloading(true)
         setDownloadError(null)
         setDownloadProgress(0)
 
         try {
-            const result = await window.electronAPI.whisper?.downloadModel()
+            const result = await window.electronAPI.whisper.downloadModel()
 
             if (result?.success) {
                 setIsComplete(true)
@@ -56,7 +66,7 @@ export const VoiceTranscribeDialog: React.FC<VoiceTranscribeDialogProps> = ({
     }
 
     const handleCancel = () => {
-        if (!isDownloading) {
+        if (!isDownloading && !isComplete) {
             onClose()
         }
     }
@@ -66,7 +76,7 @@ export const VoiceTranscribeDialog: React.FC<VoiceTranscribeDialogProps> = ({
             <div className="voice-transcribe-dialog" onClick={(e) => e.stopPropagation()}>
                 <div className="dialog-header">
                     <h3>语音转文字</h3>
-                    {!isDownloading && (
+                    {!isDownloading && !isComplete && (
                         <button className="close-button" onClick={onClose}>
                             <X size={20} />
                         </button>
@@ -121,7 +131,9 @@ export const VoiceTranscribeDialog: React.FC<VoiceTranscribeDialogProps> = ({
                             <div className="download-icon">
                                 <Download size={48} className="downloading-icon" />
                             </div>
-                            <p className="download-text">正在下载模型...</p>
+                            <p className="download-text">
+                                {downloadProgress < 1 ? '正在连接服务器...' : '正在下载模型...'}
+                            </p>
                             <div className="progress-bar">
                                 <div
                                     className="progress-fill"
@@ -129,6 +141,9 @@ export const VoiceTranscribeDialog: React.FC<VoiceTranscribeDialogProps> = ({
                                 />
                             </div>
                             <p className="progress-text">{downloadProgress.toFixed(1)}%</p>
+                            {downloadProgress < 1 && (
+                                <p className="download-hint">首次连接可能需要较长时间，请耐心等待</p>
+                            )}
                         </div>
                     )}
 

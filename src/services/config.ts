@@ -21,7 +21,8 @@ export const CONFIG_KEYS = {
   WHISPER_MODEL_NAME: 'whisperModelName',
   WHISPER_MODEL_DIR: 'whisperModelDir',
   WHISPER_DOWNLOAD_SOURCE: 'whisperDownloadSource',
-  AUTO_TRANSCRIBE_VOICE: 'autoTranscribeVoice'
+  AUTO_TRANSCRIBE_VOICE: 'autoTranscribeVoice',
+  TRANSCRIBE_LANGUAGES: 'transcribeLanguages'
 } as const
 
 // 获取解密密钥
@@ -229,4 +230,16 @@ export async function getAutoTranscribeVoice(): Promise<boolean> {
 // 设置自动语音转文字开关
 export async function setAutoTranscribeVoice(enabled: boolean): Promise<void> {
   await config.set(CONFIG_KEYS.AUTO_TRANSCRIBE_VOICE, enabled)
+}
+
+// 获取语音转文字支持的语言列表
+export async function getTranscribeLanguages(): Promise<string[]> {
+  const value = await config.get(CONFIG_KEYS.TRANSCRIBE_LANGUAGES)
+  // 默认只支持中文
+  return (value as string[]) || ['zh']
+}
+
+// 设置语音转文字支持的语言列表
+export async function setTranscribeLanguages(languages: string[]): Promise<void> {
+  await config.set(CONFIG_KEYS.TRANSCRIBE_LANGUAGES, languages)
 }

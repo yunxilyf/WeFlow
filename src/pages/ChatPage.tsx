@@ -987,6 +987,11 @@ function ChatPage(_props: ChatPageProps) {
     })
   }
 
+  const handleRequireModelDownload = useCallback((sessionId: string, messageId: string) => {
+    setPendingVoiceTranscriptRequest({ sessionId, messageId })
+    setShowVoiceTranscribeDialog(true)
+  }, [])
+
   return (
     <div className={`chat-page ${isResizing ? 'resizing' : ''}`}>
       {/* 左侧会话列表 */}
@@ -1166,6 +1171,7 @@ function ChatPage(_props: ChatPageProps) {
                         showTime={!showDateDivider && showTime}
                         myAvatarUrl={myAvatarUrl}
                         isGroupChat={isGroupChat(currentSession.username)}
+                        onRequireModelDownload={handleRequireModelDownload}
                       />
                     </div>
                   )
@@ -1298,20 +1304,16 @@ function ChatPage(_props: ChatPageProps) {
           }}
           onDownloadComplete={async () => {
             setShowVoiceTranscribeDialog(false)
-            // 下载完成后，继续转写
+            // 下载完成后，触发页面刷新让组件重新尝试转写
+            // 通过更新缓存触发组件重新检查
             if (pendingVoiceTranscriptRequest) {
-              try {
-                const result = await window.electronAPI.chat.getVoiceTranscript(
-                  pendingVoiceTranscriptRequest.sessionId,
-                  pendingVoiceTranscriptRequest.messageId
-                )
-                if (result.success) {
-                  const cacheKey = `voice-transcript:${pendingVoiceTranscriptRequest.messageId}`
-                  voiceTranscriptCache.set(cacheKey, (result.transcript || '').trim())
-                }
-              } catch (error) {
-                console.error('[ChatPage] 语音转文字失败:', error)
-              }
+              // 清除缓存中的请求标记，让组件可以重新尝试
+              const cacheKey = `voice-transcript:${pendingVoiceTranscriptRequest.messageId}`
+              // 不直接调用转写，而是让组件自己重试
+              // 通过触发一个自定义事件来通知所有 MessageBubble 组件
+              window.dispatchEvent(new CustomEvent('model-downloaded', {
+                detail: { messageId: pendingVoiceTranscriptRequest.messageId }
+              }))
             }
             setPendingVoiceTranscriptRequest(null)
           }}
@@ -1330,12 +1332,13 @@ const senderAvatarCache = new Map<string, { avatarUrl?: string; displayName?: st
 const senderAvatarLoading = new Map<string, Promise<{ avatarUrl?: string; displayName?: string } | null>>()
 
 // 消息气泡组件
-function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat }: {
+function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, onRequireModelDownload }: {
   message: Message;
   session: ChatSession;
   showTime?: boolean;
   myAvatarUrl?: string;
   isGroupChat?: boolean;
+  onRequireModelDownload?: (sessionId: string, messageId: string) => void;
 }) {
   const isSystem = isSystemMessage(message.localType)
   const isEmoji = message.localType === 47
@@ -1682,21 +1685,27 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat }:
   const requestVoiceTranscript = useCallback(async () => {
     if (voiceTranscriptLoading || voiceTranscriptRequestedRef.current) return
 
-    // 检查模型状态
-    const modelStatus = await window.electronAPI.whisper?.getModelStatus()
-    if (!modelStatus?.exists) {
-      // 模型未下载，抛出错误让外层处理
-      const error: any = new Error('MODEL_NOT_DOWNLOADED')
-      error.requiresDownload = true
-      error.sessionId = session.username
-      error.messageId = String(message.localId)
-      throw error
+    // 检查 whisper API 是否可用
+    if (!window.electronAPI?.whisper?.getModelStatus) {
+      console.warn('[ChatPage] whisper API 不可用')
+      setVoiceTranscriptError(true)
+      return
     }
 
     voiceTranscriptRequestedRef.current = true
     setVoiceTranscriptLoading(true)
     setVoiceTranscriptError(false)
     try {
+      // 检查模型状态
+      const modelStatus = await window.electronAPI.whisper.getModelStatus()
+      if (!modelStatus?.exists) {
+        const error: any = new Error('MODEL_NOT_DOWNLOADED')
+        error.requiresDownload = true
+        error.sessionId = session.username
+        error.messageId = String(message.localId)
+        throw error
+      }
+
       const result = await window.electronAPI.chat.getVoiceTranscript(session.username, String(message.localId))
       if (result.success) {
         const transcriptText = (result.transcript || '').trim()
@@ -1709,8 +1718,10 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat }:
     } catch (error: any) {
       // 检查是否是模型未下载错误
       if (error?.requiresDownload) {
-        // 不显示错误状态，等待用户手动点击转文字按钮时会触发下载弹窗
-        voiceTranscriptRequestedRef.current = false
+        // 模型未下载，触发下载弹窗
+        onRequireModelDownload?.(error.sessionId, error.messageId)
+        // 不要重置 voiceTranscriptRequestedRef，避免重复触发
+        setVoiceTranscriptLoading(false)
         return
       }
       setVoiceTranscriptError(true)
@@ -1718,7 +1729,27 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat }:
     } finally {
       setVoiceTranscriptLoading(false)
     }
-  }, [message.localId, session.username, voiceTranscriptCacheKey, voiceTranscriptLoading])
+  }, [message.localId, session.username, voiceTranscriptCacheKey, voiceTranscriptLoading, onRequireModelDownload])
+
+  // 监听模型下载完成事件
+  useEffect(() => {
+    if (!isVoice) return
+    
+    const handleModelDownloaded = (event: CustomEvent) => {
+      if (event.detail?.messageId === String(message.localId)) {
+        // 重置状态，允许重新尝试转写
+        voiceTranscriptRequestedRef.current = false
+        setVoiceTranscriptError(false)
+        // 立即尝试转写
+        void requestVoiceTranscript()
+      }
+    }
+    
+    window.addEventListener('model-downloaded', handleModelDownloaded as EventListener)
+    return () => {
+      window.removeEventListener('model-downloaded', handleModelDownloaded as EventListener)
+    }
+  }, [isVoice, message.localId, requestVoiceTranscript])
 
   // 根据设置决定是否自动转写
   const [autoTranscribeEnabled, setAutoTranscribeEnabled] = useState(false)
