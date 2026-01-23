@@ -475,6 +475,33 @@ class ExportService {
     return this.escapeHtml(value).replace(/\r?\n/g, '<br />')
   }
 
+  private formatHtmlMessageText(content: string, localType: number): string {
+    if (!content) return ''
+
+    if (localType === 49) {
+      const typeMatch = /<type>(\d+)<\/type>/i.exec(content)
+      const subType = typeMatch ? parseInt(typeMatch[1], 10) : 0
+      const title = this.extractXmlValue(content, 'title') || this.extractXmlValue(content, 'appname')
+      if (subType === 6) {
+        const fileName = this.extractXmlValue(content, 'filename') || title || '文件'
+        return `[文件] ${fileName}`.trim()
+      }
+      if (subType === 33 || subType === 36) {
+        const appName = this.extractXmlValue(content, 'appname')
+        const miniTitle = title || appName || '小程序'
+        return `[小程序] ${miniTitle}`.trim()
+      }
+      return title || '[链接]'
+    }
+
+    if (localType === 42) {
+      const nickname = this.extractXmlValue(content, 'nickname')
+      return nickname ? `[名片] ${nickname}` : '[名片]'
+    }
+
+    return this.parseMessageContent(content, localType) || ''
+  }
+
   /**
    * 导出媒体文件到指定目录
    */
@@ -2306,16 +2333,21 @@ class ExportService {
         const timeText = this.formatTimestamp(msg.createTime)
         const typeName = this.getMessageTypeName(msg.localType)
 
-        let textContent = this.parseMessageContent(msg.content, msg.localType) || ''
+        let textContent = this.formatHtmlMessageText(msg.content, msg.localType)
         if (msg.localType === 34 && useVoiceTranscript) {
           textContent = voiceTranscriptMap.get(msg.localId) || '[语音消息 - 转文字失败]'
+        }
+        if (mediaItem && (msg.localType === 3 || msg.localType === 43 || msg.localType === 47)) {
+          textContent = ''
         }
 
         let mediaHtml = ''
         if (mediaItem?.kind === 'image') {
-          mediaHtml = `<img class="message-media image" src="${this.escapeAttribute(encodeURI(mediaItem.relativePath))}" alt="${this.escapeAttribute(typeName)}" />`
+          const mediaPath = this.escapeAttribute(encodeURI(mediaItem.relativePath))
+          mediaHtml = `<img class="message-media image previewable" src="${mediaPath}" data-full="${mediaPath}" alt="${this.escapeAttribute(typeName)}" />`
         } else if (mediaItem?.kind === 'emoji') {
-          mediaHtml = `<img class="message-media emoji" src="${this.escapeAttribute(encodeURI(mediaItem.relativePath))}" alt="${this.escapeAttribute(typeName)}" />`
+          const mediaPath = this.escapeAttribute(encodeURI(mediaItem.relativePath))
+          mediaHtml = `<img class="message-media emoji previewable" src="${mediaPath}" data-full="${mediaPath}" alt="${this.escapeAttribute(typeName)}" />`
         } else if (mediaItem?.kind === 'voice') {
           mediaHtml = `<audio class="message-media audio" controls src="${this.escapeAttribute(encodeURI(mediaItem.relativePath))}"></audio>`
         } else if (mediaItem?.kind === 'video') {
@@ -2329,7 +2361,9 @@ class ExportService {
         const senderHtml = isGroup
           ? `<div class="sender-name">${this.escapeHtml(senderName)}</div>`
           : ''
+        const timeHtml = `<div class="message-time">${this.escapeHtml(timeText)}</div>`
         const messageBody = `
+            ${timeHtml}
             ${senderHtml}
             <div class="message-content">
               ${mediaHtml}
@@ -2339,7 +2373,6 @@ class ExportService {
 
         return `
           <div class="message ${isSenderMe ? 'sent' : 'received'}" data-timestamp="${msg.createTime}" data-index="${index + 1}">
-            <div class="message-time">${this.escapeHtml(timeText)}</div>
             <div class="message-row">
               <div class="avatar">${avatarHtml}</div>
               <div class="bubble">
@@ -2437,6 +2470,7 @@ class ExportService {
       }
 
       .control input,
+      .control select,
       .control button {
         border-radius: 12px;
         border: 1px solid var(--border);
@@ -2481,9 +2515,9 @@ class ExportService {
       }
 
       .message-time {
-        text-align: center;
         font-size: 12px;
         color: var(--muted);
+        margin-bottom: 6px;
       }
 
       .message-row {
@@ -2575,6 +2609,72 @@ class ExportService {
         width: 260px;
       }
 
+      .image-preview {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+        z-index: 999;
+      }
+
+      .image-preview.active {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      .image-preview img {
+        max-width: min(90vw, 1200px);
+        max-height: 90vh;
+        border-radius: 18px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+        background: #0f172a;
+      }
+
+      body[data-theme="cloud-dancer"] {
+        --accent: #6b8cff;
+        --sent: #e0e7ff;
+        --received: #ffffff;
+        --border: #d8e0f7;
+        --bg: #f6f7fb;
+      }
+
+      body[data-theme="corundum-blue"] {
+        --accent: #2563eb;
+        --sent: #dbeafe;
+        --received: #ffffff;
+        --border: #c7d2fe;
+        --bg: #eef2ff;
+      }
+
+      body[data-theme="kiwi-green"] {
+        --accent: #16a34a;
+        --sent: #dcfce7;
+        --received: #ffffff;
+        --border: #bbf7d0;
+        --bg: #f0fdf4;
+      }
+
+      body[data-theme="spicy-red"] {
+        --accent: #e11d48;
+        --sent: #ffe4e6;
+        --received: #ffffff;
+        --border: #fecdd3;
+        --bg: #fff1f2;
+      }
+
+      body[data-theme="teal-water"] {
+        --accent: #0f766e;
+        --sent: #ccfbf1;
+        --received: #ffffff;
+        --border: #99f6e4;
+        --bg: #f0fdfa;
+      }
+
       .highlight {
         outline: 2px solid var(--accent);
         outline-offset: 4px;
@@ -2607,6 +2707,16 @@ class ExportService {
             <input id="timeInput" type="datetime-local" />
           </div>
           <div class="control">
+            <label for="themeSelect">主题配色</label>
+            <select id="themeSelect">
+              <option value="cloud-dancer">云舞蓝</option>
+              <option value="corundum-blue">珊瑚蓝</option>
+              <option value="kiwi-green">奇异绿</option>
+              <option value="spicy-red">热辣红</option>
+              <option value="teal-water">蓝绿水</option>
+            </select>
+          </div>
+          <div class="control">
             <label>&nbsp;</label>
             <button id="jumpBtn" type="button">跳转到时间</button>
           </div>
@@ -2619,12 +2729,18 @@ class ExportService {
         ${renderedMessages || '<div class="empty">暂无消息</div>'}
       </div>
     </div>
+    <div class="image-preview" id="imagePreview">
+      <img id="imagePreviewTarget" alt="预览" />
+    </div>
     <script>
       const messages = Array.from(document.querySelectorAll('.message'))
       const searchInput = document.getElementById('searchInput')
       const timeInput = document.getElementById('timeInput')
       const jumpBtn = document.getElementById('jumpBtn')
       const resultCount = document.getElementById('resultCount')
+      const themeSelect = document.getElementById('themeSelect')
+      const imagePreview = document.getElementById('imagePreview')
+      const imagePreviewTarget = document.getElementById('imagePreviewTarget')
 
       const updateCount = () => {
         const visible = messages.filter((msg) => !msg.classList.contains('hidden'))
@@ -2658,6 +2774,33 @@ class ExportService {
         targetMessage.classList.add('highlight')
         targetMessage.scrollIntoView({ behavior: 'smooth', block: 'center' })
         setTimeout(() => targetMessage.classList.remove('highlight'), 2000)
+      })
+
+      const applyTheme = (value) => {
+        document.body.setAttribute('data-theme', value)
+        localStorage.setItem('weflow-export-theme', value)
+      }
+
+      const storedTheme = localStorage.getItem('weflow-export-theme') || 'cloud-dancer'
+      themeSelect.value = storedTheme
+      applyTheme(storedTheme)
+
+      themeSelect.addEventListener('change', (event) => {
+        applyTheme(event.target.value)
+      })
+
+      document.querySelectorAll('.previewable').forEach((img) => {
+        img.addEventListener('click', () => {
+          const full = img.getAttribute('data-full')
+          if (!full) return
+          imagePreviewTarget.src = full
+          imagePreview.classList.add('active')
+        })
+      })
+
+      imagePreview.addEventListener('click', () => {
+        imagePreview.classList.remove('active')
+        imagePreviewTarget.src = ''
       })
 
       updateCount()
